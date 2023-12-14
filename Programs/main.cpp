@@ -10,7 +10,7 @@
 #include <iostream>
 #include <string>
 #include <random>
-//
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -33,6 +33,7 @@ Direction newDirection(Direction forbiddenDir = Direction::NUM_DIRECTIONS);
 TravelerSegment newTravelerSegment(const TravelerSegment& currentSeg, bool& canAdd);
 void generateWalls(void);
 void generatePartitions(void);
+void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves);
 
 #if 0
 //-----------------------------------------------------------------------------
@@ -52,6 +53,8 @@ unsigned int numTravelersDone = 0;
 unsigned int numLiveThreads = 0;		//	the number of live traveler threads
 vector<Traveler> travelerList;
 vector<SlidingPartition> partitionList;
+unsigned int numSegmentGrowthMoves;
+unsigned int moveCount = 0;
 GridPosition	exitPos;	//	location of the exit
 
 //	travelers' sleep time between moves (in microseconds)
@@ -92,14 +95,18 @@ uniform_int_distribution<unsigned int> colGenerator;
 
 void drawTravelers(void)
 {
-	//-----------------------------
-	//	You may have to sychronize things here
-	//-----------------------------
-	for (unsigned int k=0; k<travelerList.size(); k++)
-	{
-		//	here I would test if the traveler thread is still live
-		drawTraveler(travelerList[k]);
-	}
+    //-----------------------------
+    //  You may have to synchronize things here
+    //-----------------------------
+
+    // Update the state of all travelers
+    updateTravelers(moveCount, numSegmentGrowthMoves);
+
+    // Draw each traveler
+    for (unsigned int k = 0; k < travelerList.size(); k++) {
+        // Here I would test if the traveler thread is still live
+        drawTraveler(travelerList[k]);
+    }
 }
 
 void updateMessages(void)
@@ -196,6 +203,22 @@ int main(int argc, char* argv[])
 	numTravelers = 8;
 	numLiveThreads = 0;
 	numTravelersDone = 0;
+    numSegmentGrowthMoves = INT_MAX;  // Default value for segment growth
+
+    if (argc >= 5) {
+        numRows = atoi(argv[1]);
+        numCols = atoi(argv[2]);
+        numTravelers = atoi(argv[3]);
+        numSegmentGrowthMoves = atoi(argv[4]);  // New argument for segment growth
+    } else if (argc == 4) {
+        numRows = atoi(argv[1]);
+        numCols = atoi(argv[2]);
+        numTravelers = atoi(argv[3]);
+        // numSegmentGrowthMoves keeps the default value
+    } else {
+        cout << "Usage: " << argv[0] << " numRows numCols numTravelers [numSegmentGrowthMoves]" << endl;
+        return 1;
+    }
 
 	//	Even though we extracted the relevant information from the argument
 	//	list, I still need to pass argc and argv to the front-end init
@@ -235,6 +258,109 @@ int main(int argc, char* argv[])
 //	This is a function that you have to edit and add to.
 //
 //==================================================================================
+
+Direction getRandomDirection() {
+    int random = rand() % 4;  // Assuming rand() is properly seeded
+    return static_cast<Direction>(random);
+}
+
+bool isValidMove(GridPosition pos, Direction dir) {
+    switch (dir) {
+        case Direction::NORTH:
+            return pos.row > 0 && grid[pos.row - 1][pos.col] == SquareType::FREE_SQUARE;
+        case Direction::SOUTH:
+            return pos.row < numRows - 1 && grid[pos.row + 1][pos.col] == SquareType::FREE_SQUARE;
+        case Direction::EAST:
+            return pos.col < numCols - 1 && grid[pos.row][pos.col + 1] == SquareType::FREE_SQUARE;
+        case Direction::WEST:
+            return pos.col > 0 && grid[pos.row][pos.col - 1] == SquareType::FREE_SQUARE;
+        default:
+            return false;
+    }
+}
+bool isValidDirectionChange(Direction currentDir, Direction newDir) {
+    if (currentDir == Direction::NORTH && newDir == Direction::SOUTH) return false;
+    if (currentDir == Direction::SOUTH && newDir == Direction::NORTH) return false;
+    if (currentDir == Direction::EAST && newDir == Direction::WEST) return false;
+    if (currentDir == Direction::WEST && newDir == Direction::EAST) return false;
+    return true;
+}
+
+void moveTravelerHead(Traveler& traveler) {
+    bool hasMoved = false;
+    while (!hasMoved) {
+        Direction newDir = getRandomDirection();
+        TravelerSegment &headSegment = traveler.segmentList.front();
+
+        if (isValidDirectionChange(headSegment.dir, newDir) && isValidMove({headSegment.row, headSegment.col}, newDir)) {
+            // Update traveler's head position
+            switch (newDir) {
+                case Direction::NORTH:
+                    headSegment.row--;
+                    break;
+                case Direction::SOUTH:
+                    headSegment.row++;
+                    break;
+                case Direction::EAST:
+                    headSegment.col++;
+                    break;
+                case Direction::WEST:
+                    headSegment.col--;
+                    break;
+            }
+            headSegment.dir = newDir;  // Update the direction of the head
+            hasMoved = true;
+        }
+    }
+}
+
+void updateSegmentPositions(Traveler& traveler) {
+    for (int i = traveler.segmentList.size() - 1; i > 0; i--) {
+        traveler.segmentList[i].row = traveler.segmentList[i - 1].row;
+        traveler.segmentList[i].col = traveler.segmentList[i - 1].col;
+    }
+}
+
+void growSegment(Traveler& traveler) {
+    TravelerSegment lastSeg = traveler.segmentList.back();
+    // Adjust the position of the new segment based on the direction of the last segment
+    switch (lastSeg.dir) {
+        case Direction::NORTH:
+            lastSeg.row++;
+            break;
+        case Direction::SOUTH:
+            lastSeg.row--;
+            break;
+        case Direction::EAST:
+            lastSeg.col--;
+            break;
+        case Direction::WEST:
+            lastSeg.col++;
+            break;
+    }
+    traveler.segmentList.push_back(lastSeg);
+}
+
+void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
+    for (Traveler& traveler : travelerList) {
+        // Move the traveler's head first
+        moveTravelerHead(traveler);
+
+        // Update the position of the remaining segments
+        updateSegmentPositions(traveler);
+
+        // Check if it's time to grow a new segment
+        if (moveCount % numSegmentGrowthMoves == 0) {
+            growSegment(traveler);
+        }
+    }
+
+    moveCount++; // Increment the move counter after all travelers have moved
+}
+
+
+
+
 
 
 void initializeApplication(void)
@@ -277,10 +403,8 @@ void initializeApplication(void)
 	//	Initialize traveler info structs
 	//	You will probably need to replace/complete this as you add thread-related data
 	float** travelerColor = createTravelerColors(numTravelers);
-	for (unsigned int k=0; k<numTravelers; k++) {
+	if (numTravelers > 0) {
 		GridPosition pos = getNewFreePosition();
-		//	Note that treating an enum as a sort of integer is increasingly
-		//	frowned upon, as C++ versions progress
 		Direction dir = static_cast<Direction>(segmentDirectionGenerator(engine));
 
 		TravelerSegment seg = {pos.row, pos.col, dir};
@@ -288,28 +412,28 @@ void initializeApplication(void)
 		traveler.segmentList.push_back(seg);
 		grid[pos.row][pos.col] = SquareType::TRAVELER;
 
-        //    I add 0-n segments to my travelers
-        unsigned int numAddSegments = segmentNumberGenerator(engine);
-        TravelerSegment currSeg = traveler.segmentList[0];
-        bool canAddSegment = true;
-        cout << "Traveler " << k << " at (row=" << pos.row << ", col=" <<
-        pos.col << "), direction: " << dirStr(dir) << ", with up to " << numAddSegments << " additional segments" << endl;
-        cout << "\t";
+		// Add 0-n segments to the traveler
+		unsigned int numAddSegments = segmentNumberGenerator(engine);
+		TravelerSegment currSeg = traveler.segmentList[0];
+		bool canAddSegment = true;
+		cout << "Traveler at (row=" << pos.row << ", col=" << pos.col << "), direction: " << dirStr(dir) << ", with up to " << numAddSegments << " additional segments" << endl;
+		cout << "\t";
 
-        for (unsigned int s=0; s<numAddSegments && canAddSegment; s++){
-            TravelerSegment newSeg = newTravelerSegment(currSeg, canAddSegment);
-            if (canAddSegment){
-                traveler.segmentList.push_back(newSeg);
-                grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
-                currSeg = newSeg;
-                cout << dirStr(newSeg.dir) << "  ";
-            }
-        }
-        cout << endl;
+		for (unsigned int s = 0; s < numAddSegments && canAddSegment; s++) {
+			TravelerSegment newSeg = newTravelerSegment(currSeg, canAddSegment);
+			if (canAddSegment) {
+				traveler.segmentList.push_back(newSeg);
+				grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
+				currSeg = newSeg;
+				cout << dirStr(newSeg.dir) << "  ";
+			}
+		}
+		cout << endl;
 
-		for (unsigned int c=0; c<4; c++)
-			traveler.rgba[c] = travelerColor[k][c];
-		
+		// Set the traveler's color
+		for (unsigned int c = 0; c < 4; c++)
+			traveler.rgba[c] = travelerColor[0][c];  // Assuming travelerColor is defined and initialized
+
 		travelerList.push_back(traveler);
 	}
 	
