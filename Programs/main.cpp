@@ -267,17 +267,41 @@ Direction getRandomDirection() {
 bool isValidMove(GridPosition pos, Direction dir) {
     switch (dir) {
         case Direction::NORTH:
-            return pos.row > 0 && grid[pos.row - 1][pos.col] == SquareType::FREE_SQUARE;
+            if (pos.row > 0) {
+                SquareType nextSquare = grid[pos.row - 1][pos.col];
+                return nextSquare != SquareType::WALL && 
+                       nextSquare != SquareType::VERTICAL_PARTITION && 
+                       nextSquare != SquareType::HORIZONTAL_PARTITION;
+            }
+            break;
         case Direction::SOUTH:
-            return pos.row < numRows - 1 && grid[pos.row + 1][pos.col] == SquareType::FREE_SQUARE;
+            if (pos.row < numRows - 1) {
+                SquareType nextSquare = grid[pos.row + 1][pos.col];
+                return nextSquare != SquareType::WALL && 
+                       nextSquare != SquareType::VERTICAL_PARTITION && 
+                       nextSquare != SquareType::HORIZONTAL_PARTITION;
+            }
+            break;
         case Direction::EAST:
-            return pos.col < numCols - 1 && grid[pos.row][pos.col + 1] == SquareType::FREE_SQUARE;
+            if (pos.col < numCols - 1) {
+                SquareType nextSquare = grid[pos.row][pos.col + 1];
+                return nextSquare != SquareType::WALL && 
+                       nextSquare != SquareType::VERTICAL_PARTITION && 
+                       nextSquare != SquareType::HORIZONTAL_PARTITION;
+            }
+            break;
         case Direction::WEST:
-            return pos.col > 0 && grid[pos.row][pos.col - 1] == SquareType::FREE_SQUARE;
-        default:
-            return false;
+            if (pos.col > 0) {
+                SquareType nextSquare = grid[pos.row][pos.col - 1];
+                return nextSquare != SquareType::WALL && 
+                       nextSquare != SquareType::VERTICAL_PARTITION && 
+                       nextSquare != SquareType::HORIZONTAL_PARTITION;
+            }
+            break;
     }
+    return false;
 }
+
 bool isValidDirectionChange(Direction currentDir, Direction newDir) {
     if (currentDir == Direction::NORTH && newDir == Direction::SOUTH) return false;
     if (currentDir == Direction::SOUTH && newDir == Direction::NORTH) return false;
@@ -315,11 +339,18 @@ void moveTravelerHead(Traveler& traveler) {
 }
 
 void updateSegmentPositions(Traveler& traveler) {
+    // We start from the second-to-last segment and move towards the head
     for (int i = traveler.segmentList.size() - 1; i > 0; i--) {
-        traveler.segmentList[i].row = traveler.segmentList[i - 1].row;
-        traveler.segmentList[i].col = traveler.segmentList[i - 1].col;
+        // Each segment moves to the position previously occupied by the segment in front of it
+        traveler.segmentList[i].row = traveler.segmentList[i - 1].prevRow;
+        traveler.segmentList[i].col = traveler.segmentList[i - 1].prevCol;
     }
+
+    // Update the previous position of the head segment after moving
+    traveler.segmentList[0].prevRow = traveler.segmentList[0].row;
+    traveler.segmentList[0].prevCol = traveler.segmentList[0].col;
 }
+
 
 void growSegment(Traveler& traveler) {
     TravelerSegment lastSeg = traveler.segmentList.back();
@@ -342,16 +373,26 @@ void growSegment(Traveler& traveler) {
 }
 
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
-    for (Traveler& traveler : travelerList) {
+    for (int i = 0; i < travelerList.size(); i++) {
         // Move the traveler's head first
-        moveTravelerHead(traveler);
+        moveTravelerHead(travelerList[i]);
+
+        // Check if the head is at the exit position
+        if (travelerList[i].segmentList.front().row == exitPos.row &&
+            travelerList[i].segmentList.front().col == exitPos.col) {
+            // Remove the traveler from the list and continue to the next traveler
+            travelerList.erase(travelerList.begin() + i);
+            i--; // Adjust the index after removal
+            numTravelersDone++; // Increment the count of travelers that solved the maze
+            continue;
+        }
 
         // Update the position of the remaining segments
-        updateSegmentPositions(traveler);
+        updateSegmentPositions(travelerList[i]);
 
         // Check if it's time to grow a new segment
         if (moveCount % numSegmentGrowthMoves == 0) {
-            growSegment(traveler);
+            growSegment(travelerList[i]);
         }
     }
 

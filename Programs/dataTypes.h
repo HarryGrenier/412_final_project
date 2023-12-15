@@ -70,6 +70,8 @@ struct TravelerSegment
 	/**	One of four possible orientations
 	 */
 	Direction dir;
+	int prevRow;
+    	int prevCol;
 
 };
 
