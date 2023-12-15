@@ -34,6 +34,8 @@ TravelerSegment newTravelerSegment(const TravelerSegment& currentSeg, bool& canA
 void generateWalls(void);
 void generatePartitions(void);
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves);
+void updateSegmentPositions(Traveler& traveler);
+
 
 #if 0
 //-----------------------------------------------------------------------------
@@ -55,6 +57,7 @@ vector<Traveler> travelerList;
 vector<SlidingPartition> partitionList;
 unsigned int numSegmentGrowthMoves;
 unsigned int moveCount = 0;
+const int MAX_ATTEMPTS = 4;
 GridPosition	exitPos;	//	location of the exit
 
 //	travelers' sleep time between moves (in microseconds)
@@ -87,7 +90,7 @@ uniform_int_distribution<unsigned int> colGenerator;
 #pragma mark Functions called by the front end
 //-----------------------------------------------------------------------------
 #endif
-//==================================================================================
+//============================================================= =====================
 //	These are the functions that tie the simulation with the rendering.
 //	Some parts are "don't touch."  Other parts need your intervention
 //	to make sure that access to critical section is properly synchronized
@@ -265,42 +268,18 @@ Direction getRandomDirection() {
 }
 
 bool isValidMove(GridPosition pos, Direction dir) {
-    switch (dir) {
-        case Direction::NORTH:
-            if (pos.row > 0) {
-                SquareType nextSquare = grid[pos.row - 1][pos.col];
-                return nextSquare != SquareType::WALL && 
-                       nextSquare != SquareType::VERTICAL_PARTITION && 
-                       nextSquare != SquareType::HORIZONTAL_PARTITION;
-            }
-            break;
-        case Direction::SOUTH:
-            if (pos.row < numRows - 1) {
-                SquareType nextSquare = grid[pos.row + 1][pos.col];
-                return nextSquare != SquareType::WALL && 
-                       nextSquare != SquareType::VERTICAL_PARTITION && 
-                       nextSquare != SquareType::HORIZONTAL_PARTITION;
-            }
-            break;
-        case Direction::EAST:
-            if (pos.col < numCols - 1) {
-                SquareType nextSquare = grid[pos.row][pos.col + 1];
-                return nextSquare != SquareType::WALL && 
-                       nextSquare != SquareType::VERTICAL_PARTITION && 
-                       nextSquare != SquareType::HORIZONTAL_PARTITION;
-            }
-            break;
-        case Direction::WEST:
-            if (pos.col > 0) {
-                SquareType nextSquare = grid[pos.row][pos.col - 1];
-                return nextSquare != SquareType::WALL && 
-                       nextSquare != SquareType::VERTICAL_PARTITION && 
-                       nextSquare != SquareType::HORIZONTAL_PARTITION;
-            }
-            break;
+    // Check for grid boundaries
+    if (pos.row >= numRows || pos.row < 0 || pos.col >= numCols || pos.col < 0) {
+        return false;
     }
-    return false;
+
+    // Check the type of square at the next position
+    SquareType nextSquareType = grid[pos.row][pos.col];
+    return nextSquareType != SquareType::WALL &&
+           nextSquareType != SquareType::VERTICAL_PARTITION &&
+           nextSquareType != SquareType::HORIZONTAL_PARTITION;
 }
+
 
 bool isValidDirectionChange(Direction currentDir, Direction newDir) {
     if (currentDir == Direction::NORTH && newDir == Direction::SOUTH) return false;
@@ -310,94 +289,101 @@ bool isValidDirectionChange(Direction currentDir, Direction newDir) {
     return true;
 }
 
-void moveTravelerHead(Traveler& traveler) {
-    bool hasMoved = false;
-    while (!hasMoved) {
-        Direction newDir = getRandomDirection();
-        TravelerSegment &headSegment = traveler.segmentList.front();
-
-        if (isValidDirectionChange(headSegment.dir, newDir) && isValidMove({headSegment.row, headSegment.col}, newDir)) {
-            // Update traveler's head position
-            switch (newDir) {
-                case Direction::NORTH:
-                    headSegment.row--;
-                    break;
-                case Direction::SOUTH:
-                    headSegment.row++;
-                    break;
-                case Direction::EAST:
-                    headSegment.col++;
-                    break;
-                case Direction::WEST:
-                    headSegment.col--;
-                    break;
-            }
-            headSegment.dir = newDir;  // Update the direction of the head
-            hasMoved = true;
-        }
-    }
-}
 
 void updateSegmentPositions(Traveler& traveler) {
-    // We start from the second-to-last segment and move towards the head
     for (int i = traveler.segmentList.size() - 1; i > 0; i--) {
-        // Each segment moves to the position previously occupied by the segment in front of it
-        traveler.segmentList[i].row = traveler.segmentList[i - 1].prevRow;
-        traveler.segmentList[i].col = traveler.segmentList[i - 1].prevCol;
+        traveler.segmentList[i] = traveler.segmentList[i - 1];
     }
 
-    // Update the previous position of the head segment after moving
-    traveler.segmentList[0].prevRow = traveler.segmentList[0].row;
-    traveler.segmentList[0].prevCol = traveler.segmentList[0].col;
+    if (!traveler.previousPositions.empty()) {
+        GridPosition nextPos = traveler.previousPositions.front();
+        traveler.previousPositions.pop_front();
+
+        if (traveler.segmentList.size() > 0) {
+            traveler.segmentList[0].row = nextPos.row;
+            traveler.segmentList[0].col = nextPos.col;
+        }
+    }
 }
 
 
 void growSegment(Traveler& traveler) {
-    TravelerSegment lastSeg = traveler.segmentList.back();
-    // Adjust the position of the new segment based on the direction of the last segment
-    switch (lastSeg.dir) {
-        case Direction::NORTH:
-            lastSeg.row++;
-            break;
-        case Direction::SOUTH:
-            lastSeg.row--;
-            break;
-        case Direction::EAST:
-            lastSeg.col--;
-            break;
-        case Direction::WEST:
-            lastSeg.col++;
-            break;
+    if (!traveler.segmentList.empty()) {
+        TravelerSegment &lastSegment = traveler.segmentList.back();
+        
+        TravelerSegment newSegment = {lastSegment.prevRow, lastSegment.prevCol, lastSegment.dir};
+        traveler.segmentList.push_back(newSegment);
     }
-    traveler.segmentList.push_back(lastSeg);
 }
+
+
+void moveTravelerHead(Traveler& traveler) {
+    bool hasMoved = false;
+    int attempts = 0;
+    Direction newDir;
+    GridPosition nextPosition;
+
+    while (!hasMoved && attempts < MAX_ATTEMPTS) {
+        newDir = getRandomDirection();
+        TravelerSegment &headSegment = traveler.segmentList.front();
+
+        nextPosition = {headSegment.row, headSegment.col};
+        // Calculate the new position based on the current direction
+        switch (newDir) {
+            case Direction::NORTH: if (headSegment.row > 0) nextPosition.row--; break;
+            case Direction::SOUTH: if (headSegment.row < numRows - 1) nextPosition.row++; break;
+            case Direction::EAST:  if (headSegment.col < numCols - 1) nextPosition.col++; break;
+            case Direction::WEST:  if (headSegment.col > 0) nextPosition.col--; break;
+        }
+
+        // Check if the new direction and next position are valid
+        if (isValidDirectionChange(headSegment.dir, newDir) && isValidMove(nextPosition, newDir)) {
+            // Move the head and update the direction
+            headSegment.row = nextPosition.row;
+            headSegment.col = nextPosition.col;
+            headSegment.dir = newDir;
+            hasMoved = true;
+
+            // Record the old head position
+            traveler.previousPositions.push_front({headSegment.row, headSegment.col});
+        }
+        attempts++;
+    }
+
+    // Only update segment positions if the head has moved
+    if (hasMoved) {
+        updateSegmentPositions(traveler);
+        traveler.hasMoved = true;
+    } else {
+        traveler.hasMoved = false;
+    }
+}
+
+
+
+
+
 
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
     for (int i = 0; i < travelerList.size(); i++) {
-        // Move the traveler's head first
         moveTravelerHead(travelerList[i]);
-
-        // Check if the head is at the exit position
+        
         if (travelerList[i].segmentList.front().row == exitPos.row &&
             travelerList[i].segmentList.front().col == exitPos.col) {
-            // Remove the traveler from the list and continue to the next traveler
             travelerList.erase(travelerList.begin() + i);
-            i--; // Adjust the index after removal
-            numTravelersDone++; // Increment the count of travelers that solved the maze
+            i--;
+            numTravelersDone++;
             continue;
         }
-
-        // Update the position of the remaining segments
-        updateSegmentPositions(travelerList[i]);
-
-        // Check if it's time to grow a new segment
-        if (moveCount % numSegmentGrowthMoves == 0) {
+		if (moveCount % numSegmentGrowthMoves == 0 && travelerList[i].hasMoved) {
             growSegment(travelerList[i]);
         }
     }
 
-    moveCount++; // Increment the move counter after all travelers have moved
+    moveCount++;
 }
+
+
 
 
 
@@ -450,6 +436,7 @@ void initializeApplication(void)
 
 		TravelerSegment seg = {pos.row, pos.col, dir};
 		Traveler traveler;
+		traveler.hasMoved = true;  
 		traveler.segmentList.push_back(seg);
 		grid[pos.row][pos.col] = SquareType::TRAVELER;
 

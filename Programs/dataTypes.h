@@ -10,6 +10,8 @@
 
 #include <vector>
 #include <string>
+#include <deque>
+
 
 /**	Travel Direction data type.
  *	Note that if you define a variable
@@ -59,20 +61,12 @@ struct GridPosition
 /**
  *	Data type to store the position and Direction of a traveler's segment
  */
-struct TravelerSegment
-{
-	/**	row index
-	 */
-	unsigned int row;
-	/** column index
-	 */
-	unsigned int col;
-	/**	One of four possible orientations
-	 */
-	Direction dir;
-	int prevRow;
-    	int prevCol;
-
+struct TravelerSegment {
+    unsigned int row;
+    unsigned int col;
+    Direction dir;
+    unsigned int prevRow;  // Changed to unsigned int
+    unsigned int prevCol;  // Changed to unsigned int
 };
 
 
@@ -93,6 +87,9 @@ struct Traveler
 	/**	The list of segments that form the 'tail' of the traveler
 	 */
 	std::vector<TravelerSegment> segmentList;
+	// Queue for tracking the head's previous positions
+    	std::deque<GridPosition> previousPositions;
+	bool hasMoved;
 	
 };
 
