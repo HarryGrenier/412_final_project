@@ -330,10 +330,10 @@ void moveTravelerHead(Traveler& traveler) {
         nextPosition = {headSegment.row, headSegment.col};
         // Calculate the new position based on the current direction
         switch (newDir) {
-            case Direction::NORTH: if (headSegment.row > 0) nextPosition.row--; break;
-            case Direction::SOUTH: if (headSegment.row < numRows - 1) nextPosition.row++; break;
-            case Direction::EAST:  if (headSegment.col < numCols - 1) nextPosition.col++; break;
-            case Direction::WEST:  if (headSegment.col > 0) nextPosition.col--; break;
+            case Direction::NORTH: nextPosition.row--; break;
+            case Direction::SOUTH: nextPosition.row++; break;
+            case Direction::EAST:  nextPosition.col++; break;
+            case Direction::WEST:  nextPosition.col--; break;
         }
 
         // Check if the new direction and next position are valid
@@ -358,6 +358,7 @@ void moveTravelerHead(Traveler& traveler) {
         traveler.hasMoved = false;
     }
 }
+
 
 
 
