@@ -91,6 +91,8 @@ float** travelerColors = nullptr;
 
 std::vector<Traveler> sharedTravelers;
 pthread_mutex_t lock;
+pthread_mutex_t** gridLocks;
+
 
 
 #if 0
@@ -244,65 +246,85 @@ bool canMovePartition(const SlidingPartition& part, Direction dir, SquareType** 
     for (const auto& pos : part.blockList) {
         int newRow = pos.row;
         int newCol = pos.col;
-
-        // Adjust movement based on direction
         switch (dir) {
             case Direction::NORTH: newRow--; break;
             case Direction::SOUTH: newRow++; break;
             case Direction::EAST: newCol++; break;
             case Direction::WEST: newCol--; break;
         }
-
-        // Check boundaries
         if (newRow < 0 || newRow >= numRows || newCol < 0 || newCol >= numCols) {
             return false;
         }
-
-        // Check for free space and collisions with other partitions
         if (grid[newRow][newCol] != SquareType::FREE_SQUARE) {
-            // Additionally check if the space is occupied by another partition
             for (const auto& otherPart : partitions) {
-                if (&otherPart == &part) continue; // Skip checking against itself
+                if (&otherPart == &part) continue;
                 for (const auto& otherPos : otherPart.blockList) {
                     if (newRow == otherPos.row && newCol == otherPos.col) {
-                        // Collision detected
                         return false;
                     }
                 }
             }
         }
+        // Check if the new position is already locked by another thread
+        if (pthread_mutex_trylock(&gridLocks[newRow][newCol]) != 0) {
+            // Unlock the already locked positions
+            for (const auto& prevLockedPos : part.blockList) {
+                if (prevLockedPos.row != newRow || prevLockedPos.col != newCol) {
+                    pthread_mutex_unlock(&gridLocks[prevLockedPos.row][prevLockedPos.col]);
+                }
+            }
+            return false;
+        } else {
+            // Unlock immediately as we are only checking
+            pthread_mutex_unlock(&gridLocks[newRow][newCol]);
+        }
     }
     return true;
 }
 
-
 void movePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions) {
+    // Check if the move is valid first
     if (!canMovePartition(part, dir, grid, numRows, numCols, partitions)) {
-        // Debugging: Log that the partition cannot move
-        return;
+        return; // Move is not valid
     }
 
-    // Clear old position from grid
-    for (const auto& pos : part.blockList) {
-        grid[pos.row][pos.col] = SquareType::FREE_SQUARE;
-    }
-
-    // Update partition position
+    std::vector<GridPosition> newPositions;
+    // Attempt to lock the new positions for the partition
     for (auto& pos : part.blockList) {
+        GridPosition newPos = pos;
         switch (dir) {
-            case Direction::NORTH: pos.row--; break;
-            case Direction::SOUTH: pos.row++; break;
-            case Direction::EAST: pos.col++; break;
-            case Direction::WEST: pos.col--; break;
+            case Direction::NORTH: newPos.row--; break;
+            case Direction::SOUTH: newPos.row++; break;
+            case Direction::EAST: newPos.col++; break;
+            case Direction::WEST: newPos.col--; break;
+        }
+
+        if (newPos.row >= 0 && newPos.row < numRows && newPos.col >= 0 && newPos.col < numCols) {
+            pthread_mutex_lock(&gridLocks[newPos.row][newPos.col]);
+            newPositions.push_back(newPos);
+        } else {
+            // If any new position is invalid, release all locks and return
+            for (auto& lockedPos : newPositions) {
+                pthread_mutex_unlock(&gridLocks[lockedPos.row][lockedPos.col]);
+            }
+            return; // Invalid move
         }
     }
 
-    // Mark new position on grid
+    // Clear old positions from grid and unlock
+    for (const auto& pos : part.blockList) {
+        grid[pos.row][pos.col] = SquareType::FREE_SQUARE;
+        pthread_mutex_unlock(&gridLocks[pos.row][pos.col]);
+    }
+
+    // Update partition position
+    part.blockList = newPositions;
+
+    // Mark new positions on grid
     for (const auto& pos : part.blockList) {
         grid[pos.row][pos.col] = part.isVertical ? SquareType::VERTICAL_PARTITION : SquareType::HORIZONTAL_PARTITION;
     }
 }
-
 
 void safeMovePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions) {
     pthread_mutex_lock(&lock);
@@ -383,14 +405,17 @@ void growSegment(Traveler& traveler) {
 	//Locked when updateTravelers is called
 	pthread_mutex_lock(&lock);  // Use global lock or a specific lock for the traveler
 
+
     if (!traveler.segmentList.empty()) {
         TravelerSegment& lastSegment = traveler.segmentList.back();
+		
 
         // New segment takes the current position of the last segment as its previous position
         TravelerSegment newSegment = {lastSegment.row, lastSegment.col, lastSegment.dir, lastSegment.prevRow, lastSegment.prevCol};
         traveler.segmentList.push_back(newSegment);
     }
 	pthread_mutex_unlock(&lock);
+
 }
 
 
@@ -438,11 +463,15 @@ void moveTravelerHead(Traveler& traveler) {
 
         // Check if the new direction and next position are valid
         if (isValidMove(nextPosition, newDir)) {
+			pthread_mutex_lock(&gridLocks[nextPosition.row][nextPosition.col]);
+
             // Move the head and update the direction
             headSegment.row = nextPosition.row;
             headSegment.col = nextPosition.col;
             headSegment.dir = newDir;
             hasMoved = true;
+			pthread_mutex_unlock(&gridLocks[headSegment.row][headSegment.col]);
+
 
             // Record the old head position and clear tried directions
             traveler.previousPositions.push_front({headSegment.row, headSegment.col});
@@ -543,6 +572,14 @@ void initializeApplication(void) {
 
 
 	pthread_mutex_init(&lock, NULL);
+	gridLocks = new pthread_mutex_t*[numRows];
+for (unsigned int i = 0; i < numRows; i++) {
+    gridLocks[i] = new pthread_mutex_t[numCols];
+    for (unsigned int j = 0; j < numCols; j++) {
+        pthread_mutex_init(&gridLocks[i][j], NULL);
+    }
+}
+
 
 }
 
@@ -693,6 +730,15 @@ int main(int argc, char* argv[])
 
     // Clean up
 	// Wait for all threads to finish
+	// Cleanup
+for (unsigned int i = 0; i < numRows; i++) {
+    for (unsigned int j = 0; j < numCols; j++) {
+        pthread_mutex_destroy(&gridLocks[i][j]);
+    }
+    delete[] gridLocks[i];
+}
+delete[] gridLocks;
+
     for (int i = 0; i < numTravelers; ++i) {
         pthread_join(threads[i], NULL);
     }
