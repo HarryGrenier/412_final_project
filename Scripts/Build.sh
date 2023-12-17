@@ -1,4 +1,4 @@
 #!/bin/bash
-g++ -o ./../finalProject ./../Programs/*.cpp -lGL -lGLU -lglut
+g++ -o ./../finalProject ./../Program4/*.cpp -g -lGL -lGLU -lglut
 
-./../finalProject 32 32 1 100
+./../finalProject 32 32 12 100
