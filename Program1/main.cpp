@@ -1,12 +1,3 @@
-//
-//  main.c
-//  Final Project CSC412
-//
-//  Created by Jean-Yves Hervé on 2020-12-01, rev. 2023-12-04
-//
-//	This is public domain code.  By all means appropriate it and change is to your
-//	heart's content.
-
 #include <iostream>
 #include <string>
 #include <random>
@@ -14,7 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
-//
+
 #include "gl_frontEnd.h"
 
 //	feel free to "un-use" std if this is against your beliefs.
@@ -195,15 +186,10 @@ void slowdownTravelers(void)
 //	You shouldn't have to change anything in the main function besides
 //	initialization of the various global variables and lists
 //------------------------------------------------------------------------
-int main(int argc, char* argv[])
-{
-	//	We know that the arguments  of the program  are going
-	//	to be the width (number of columns) and height (number of rows) of the
-	//	grid, the number of travelers, etc.
-	//	So far, I hard code-some values
+int main(int argc, char* argv[]){
 	numRows = 30;
 	numCols = 35;
-	numTravelers = 8;
+	numTravelers = 1;
 	numLiveThreads = 0;
 	numTravelersDone = 0;
     numSegmentGrowthMoves = INT_MAX;  // Default value for segment growth
@@ -211,12 +197,10 @@ int main(int argc, char* argv[])
     if (argc >= 5) {
         numRows = atoi(argv[1]);
         numCols = atoi(argv[2]);
-        numTravelers = atoi(argv[3]);
         numSegmentGrowthMoves = atoi(argv[4]);  // New argument for segment growth
     } else if (argc == 4) {
         numRows = atoi(argv[1]);
         numCols = atoi(argv[2]);
-        numTravelers = atoi(argv[3]);
         // numSegmentGrowthMoves keeps the default value
     } else {
         cout << "Usage: " << argv[0] << " numRows numCols numTravelers [numSegmentGrowthMoves]" << endl;
@@ -256,79 +240,85 @@ int main(int argc, char* argv[])
 }
 
 
-//==================================================================================
-//
-//	This is a function that you have to edit and add to.
-//
-//==================================================================================
-
+// Gets a random direction for a traveler
 Direction getRandomDirection() {
-    int random = rand() % 4;  // Assuming rand() is properly seeded
-    return static_cast<Direction>(random);
+    int random = rand() % 4;  // Generate a random number between 0 and 3
+    return static_cast<Direction>(random);  // Cast the number to a Direction type
 }
 
+// Checks if a move for a traveler is valid within the grid and not blocked
 bool isValidMove(GridPosition pos, Direction dir) {
-    // Check for grid boundaries
+    // Ensure the position is within the boundaries of the grid
     if (pos.row >= numRows || pos.row < 0 || pos.col >= numCols || pos.col < 0) {
         return false;
     }
 
-    // Check the type of square at the next position
+    // Check the square type at the next position to check that it's not a wall or partition
     SquareType nextSquareType = grid[pos.row][pos.col];
     return nextSquareType != SquareType::WALL &&
            nextSquareType != SquareType::VERTICAL_PARTITION &&
            nextSquareType != SquareType::HORIZONTAL_PARTITION;
 }
 
-
+// Checks that a traveler doesn't reverse direction
 bool isValidDirectionChange(Direction currentDir, Direction newDir) {
-    if (currentDir == Direction::NORTH && newDir == Direction::SOUTH) return false;
-    if (currentDir == Direction::SOUTH && newDir == Direction::NORTH) return false;
-    if (currentDir == Direction::EAST && newDir == Direction::WEST) return false;
-    if (currentDir == Direction::WEST && newDir == Direction::EAST) return false;
+    // Prevent reversal of direction
+    if ((currentDir == Direction::NORTH && newDir == Direction::SOUTH) ||
+        (currentDir == Direction::SOUTH && newDir == Direction::NORTH) ||
+        (currentDir == Direction::EAST && newDir == Direction::WEST) ||
+        (currentDir == Direction::WEST && newDir == Direction::EAST)) {
+        return false;
+    }
     return true;
 }
 
-
+// Updates the positions of all segments of a traveler
 void updateSegmentPositions(Traveler& traveler) {
+    // Move each segment to the position of the segment in front of it
     for (int i = traveler.segmentList.size() - 1; i > 0; i--) {
         traveler.segmentList[i] = traveler.segmentList[i - 1];
     }
 
+    // Update the head segment's position if there are previous positions stored
     if (!traveler.previousPositions.empty()) {
         GridPosition nextPos = traveler.previousPositions.front();
         traveler.previousPositions.pop_front();
 
-        if (traveler.segmentList.size() > 0) {
+        // Update the position of the head segment
+        if (!traveler.segmentList.empty()) {
             traveler.segmentList[0].row = nextPos.row;
             traveler.segmentList[0].col = nextPos.col;
         }
     }
 }
 
-
+// Adds a new segment to the end of a traveler
 void growSegment(Traveler& traveler) {
+    // Check if there are existing segments to grow from
     if (!traveler.segmentList.empty()) {
+        // Get the last segment
         TravelerSegment &lastSegment = traveler.segmentList.back();
         
+        // Create a new segment behind the last segment
         TravelerSegment newSegment = {lastSegment.prevRow, lastSegment.prevCol, lastSegment.dir};
-        traveler.segmentList.push_back(newSegment);
+        traveler.segmentList.push_back(newSegment);  // Add the new segment
     }
 }
 
-
+// Moves the head of a traveler in a random valid direction
 void moveTravelerHead(Traveler& traveler) {
     bool hasMoved = false;
     int attempts = 0;
     Direction newDir;
     GridPosition nextPosition;
 
+    // Attempt to move the head until a valid move is made or MAX_ATTEMPTS is reached
     while (!hasMoved && attempts < MAX_ATTEMPTS) {
         newDir = getRandomDirection();
         TravelerSegment &headSegment = traveler.segmentList.front();
 
+        // Calculate the next position based on the new direction
         nextPosition = {headSegment.row, headSegment.col};
-        // Calculate the new position based on the current direction
         switch (newDir) {
             case Direction::NORTH: nextPosition.row--; break;
             case Direction::SOUTH: nextPosition.row++; break;
@@ -336,9 +326,9 @@ void moveTravelerHead(Traveler& traveler) {
             case Direction::WEST:  nextPosition.col--; break;
         }
 
-        // Check if the new direction and next position are valid
+        // Check if the new direction and position are valid
         if (isValidDirectionChange(headSegment.dir, newDir) && isValidMove(nextPosition, newDir)) {
-            // Move the head and update the direction
+            // Update the head segment's position and direction
             headSegment.row = nextPosition.row;
             headSegment.col = nextPosition.col;
             headSegment.dir = newDir;
@@ -350,7 +340,7 @@ void moveTravelerHead(Traveler& traveler) {
         attempts++;
     }
 
-    // Only update segment positions if the head has moved
+    // Update the positions of all segments if the head has moved
     if (hasMoved) {
         updateSegmentPositions(traveler);
         traveler.hasMoved = true;
@@ -359,30 +349,32 @@ void moveTravelerHead(Traveler& traveler) {
     }
 }
 
-
-
-
-
-
-
+// Updates the traveler moving them and growing segments as necessary
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
+    // Iterate through each traveler
     for (int i = 0; i < travelerList.size(); i++) {
+        // Move the traveler's head
         moveTravelerHead(travelerList[i]);
         
+        // Check if the traveler has reached the exit
         if (travelerList[i].segmentList.front().row == exitPos.row &&
             travelerList[i].segmentList.front().col == exitPos.col) {
+            // Remove the traveler and update the count of travelers done
             travelerList.erase(travelerList.begin() + i);
             i--;
             numTravelersDone++;
             continue;
         }
-		if (moveCount % numSegmentGrowthMoves == 0 && travelerList[i].hasMoved) {
+        // Grow the traveler's segments at specified intervals
+        if (moveCount % numSegmentGrowthMoves == 0 && travelerList[i].hasMoved) {
             growSegment(travelerList[i]);
         }
     }
 
+    // Increment the move count after updating all travelers
     moveCount++;
 }
+
 
 
 

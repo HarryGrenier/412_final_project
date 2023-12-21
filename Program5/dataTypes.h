@@ -93,6 +93,7 @@ struct Traveler
 	bool hasMoved;
 	std::set<Direction> triedDirections;
 	pthread_mutex_t lock; // Lock for this specific traveler
+	bool isActive = true;
 
 };
 

@@ -92,6 +92,7 @@ struct Traveler
     std::deque<GridPosition> previousPositions;
 	bool hasMoved;
 	std::set<Direction> triedDirections;
+	bool isActive = true;
 };
 
 /**

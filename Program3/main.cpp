@@ -161,17 +161,20 @@ void slowdownTravelers(void)
 }
 
 void drawTravelers(void) {
-	updateTravelers(moveCount, numSegmentGrowthMoves);
-	pthread_mutex_lock(&lock);
+    updateTravelers(moveCount, numSegmentGrowthMoves);  // Update the state of all travelers
+
+    pthread_mutex_lock(&lock);  // Lock to synchronize access to shared data
+
     for (unsigned int k = 0; k < sharedTravelers.size(); k++) {
-        // Check if the traveler has been initialized (non-empty segmentList)
-        if (!sharedTravelers[k].segmentList.empty()) {
-            drawTraveler(sharedTravelers[k]);
+        // Check if the traveler is active and has been initialized (non-empty segmentList)
+        if (sharedTravelers[k].isActive && !sharedTravelers[k].segmentList.empty()) {
+            drawTraveler(sharedTravelers[k]);  // Draw the active traveler
         }
     }
-	pthread_mutex_unlock(&lock);
 
+    pthread_mutex_unlock(&lock);  // Unlock after processing
 }
+
 
 
 void updateMessages(void)
@@ -287,15 +290,21 @@ void growSegment(Traveler& traveler) {
 
 
 void moveTravelerHead(Traveler& traveler) {
-	pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&lock);
+
+    // If the traveler is not active, just unlock and return
+    if (!traveler.isActive) {
+        pthread_mutex_unlock(&lock);
+        return;
+    }
 
     bool hasMoved = false;
     Direction newDir;
     GridPosition nextPosition;
-	if (traveler.segmentList.empty()) {
-        // Handle the error or simply return to avoid further processing
-		pthread_mutex_unlock(&lock);
 
+    if (traveler.segmentList.empty()) {
+        // Handle the error or simply return to avoid further processing
+        pthread_mutex_unlock(&lock);
         return;
     }
 
@@ -306,8 +315,7 @@ void moveTravelerHead(Traveler& traveler) {
 
     // Attempt to find a new direction that hasn't been tried yet
     while (!hasMoved && traveler.triedDirections.size() < static_cast<unsigned int>(Direction::NUM_DIRECTIONS)) {
-        Direction newDir = getRandomDirection(traveler.triedDirections);
-
+        newDir = getRandomDirection(traveler.triedDirections);
 
         // Skip if this direction has been tried already from the current position
         if (traveler.triedDirections.find(newDir) != traveler.triedDirections.end()) {
@@ -316,7 +324,6 @@ void moveTravelerHead(Traveler& traveler) {
 
         TravelerSegment &headSegment = traveler.segmentList.front();
         nextPosition = {headSegment.row, headSegment.col};
-		
 
         // Calculate the new position based on the current direction
         switch (newDir) {
@@ -350,9 +357,15 @@ void moveTravelerHead(Traveler& traveler) {
     } else {
         traveler.hasMoved = false;
     }
-		pthread_mutex_unlock(&lock);
 
+    // Check if the traveler has reached the exit and update isActive status
+    if (traveler.segmentList.front().row == exitPos.row && traveler.segmentList.front().col == exitPos.col) {
+        traveler.isActive = false; // Mark traveler as inactive
+    }
+
+    pthread_mutex_unlock(&lock);
 }
+
 
 
 
@@ -364,8 +377,9 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
     pthread_mutex_lock(&lock); // Lock at the beginning
 
     for (int i = 0; i < sharedTravelers.size(); i++) {
-        if (sharedTravelers[i].segmentList.empty()) {
-            continue; // Skip to the next traveler
+        // Skip to the next traveler if it's inactive or has an empty segment list
+        if (!sharedTravelers[i].isActive || sharedTravelers[i].segmentList.empty()) {
+            continue;
         }
 
         // Unlock before calling other functions that also use locks
@@ -373,15 +387,15 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
         moveTravelerHead(sharedTravelers[i]);
         pthread_mutex_lock(&lock); // Re-lock after the function call
 
-        // Check conditions and possibly modify sharedTravelers
+        // Check if the traveler has reached the exit and mark it as inactive
         if (sharedTravelers[i].segmentList.front().row == exitPos.row &&
             sharedTravelers[i].segmentList.front().col == exitPos.col) {
-            sharedTravelers.erase(sharedTravelers.begin() + i);
-            i--;
+            sharedTravelers[i].isActive = false; // Mark traveler as inactive
             numTravelersDone++;
             continue; // Already inside the lock, so no need to re-lock here
         }
 
+        // If it's time to grow the segment and the traveler has moved, do so
         if (moveCount % numSegmentGrowthMoves == 0 && sharedTravelers[i].hasMoved) {
             // Unlock before calling functions that also use locks
             pthread_mutex_unlock(&lock);
@@ -393,6 +407,7 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
     moveCount++;
     pthread_mutex_unlock(&lock); // Unlock at the end
 }
+
 
 
 
@@ -448,7 +463,7 @@ void* travelerThreadFunction(void* arg) {
     std::uniform_int_distribution<unsigned int> segmentDistr(0, MAX_NUM_INITIAL_SEGMENTS);
     
     // Create the head of the traveler
-    GridPosition startPos = {rowDistr(eng), colDistr(eng)};
+    GridPosition startPos = getNewFreePosition();
     Direction startDir = static_cast<Direction>(dirDistr(eng));
     TravelerSegment startSegment = {startPos.row, startPos.col, startDir};
     traveler.segmentList.push_back(startSegment);
@@ -563,9 +578,20 @@ int main(int argc, char* argv[])
 	glutMainLoop();
 	
     // Join threads after GLUT main loop
+    for (int i = 0; i < numTravelers; ++i) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            cerr << "Error joining thread " << i << endl;
+        }
+    }
 
-    // Clean up
-	pthread_mutex_destroy(&lock);
+    // Clean up travelers: remove all inactive travelers
+    sharedTravelers.erase(
+        std::remove_if(sharedTravelers.begin(), sharedTravelers.end(),
+                       [](const Traveler& t) { return !t.isActive; }),
+        sharedTravelers.end());
+
+    // Existing cleanup code...
+    pthread_mutex_destroy(&lock);
 
     for (unsigned int i = 0; i < numRows; i++) {
         delete [] grid[i];
@@ -881,4 +907,3 @@ void generatePartitions(void)
 		}
 	}
 }
-

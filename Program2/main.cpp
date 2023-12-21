@@ -1,12 +1,3 @@
-//
-//  main.c
-//  Final Project CSC412
-//
-//  Created by Jean-Yves Hervé on 2020-12-01, rev. 2023-12-04
-//
-//	This is public domain code.  By all means appropriate it and change is to your
-//	heart's content.
-
 #include <iostream>
 #include <string>
 #include <random>
@@ -211,7 +202,7 @@ Direction getRandomDirection(const std::set<Direction>& excludedDirections) {
     return possibleDirections[dirGen(rng)];
 }
 
-
+// Checks if a move for a traveler is valid within the grid and not blocked
 bool isValidMove(GridPosition pos, Direction dir) {
     // Check for grid boundaries
     if (pos.row >= numRows || pos.row < 0 || pos.col >= numCols || pos.col < 0) {
@@ -225,8 +216,9 @@ bool isValidMove(GridPosition pos, Direction dir) {
            nextSquareType != SquareType::HORIZONTAL_PARTITION;
 }
 
-
+// Checks that a traveler doesn't reverse direction
 bool isValidDirectionChange(Direction currentDir, Direction newDir) {
+	// Prevent reversal of direction
     if (currentDir == Direction::NORTH && newDir == Direction::SOUTH) return false;
     if (currentDir == Direction::SOUTH && newDir == Direction::NORTH) return false;
     if (currentDir == Direction::EAST && newDir == Direction::WEST) return false;
@@ -234,7 +226,7 @@ bool isValidDirectionChange(Direction currentDir, Direction newDir) {
     return true;
 }
 
-
+// Updates the positions of all segments of a traveler
 void updateSegmentPositions(Traveler& traveler) {
     for (int i = traveler.segmentList.size() - 1; i > 0; i--) {
         // Update the previous position to the current position before moving
@@ -259,7 +251,7 @@ void updateSegmentPositions(Traveler& traveler) {
     }
 }
 
-
+// Adds a new segment to the end of a traveler
 void growSegment(Traveler& traveler) {
     if (!traveler.segmentList.empty()) {
         TravelerSegment& lastSegment = traveler.segmentList.back();
@@ -272,7 +264,7 @@ void growSegment(Traveler& traveler) {
 
 
 
-
+// Moves the head of a traveler in a random valid direction
 void moveTravelerHead(Traveler& traveler) {
     bool hasMoved = false;
     Direction newDir;
@@ -340,7 +332,7 @@ void moveTravelerHead(Traveler& traveler) {
 
 
 
-
+// Updates the traveler moving them and growing segments as necessary
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
     for (int i = 0; i < sharedTravelers.size(); i++) {
         if (sharedTravelers[i].segmentList.empty()) {
@@ -416,11 +408,11 @@ void* travelerThreadFunction(void* arg) {
     std::uniform_int_distribution<unsigned int> segmentDistr(0, MAX_NUM_INITIAL_SEGMENTS);
     
     // Create the head of the traveler
-    GridPosition startPos = {rowDistr(eng), colDistr(eng)};
+    GridPosition startPos = getNewFreePosition(); // Use the function to get a free position
     Direction startDir = static_cast<Direction>(dirDistr(eng));
     TravelerSegment startSegment = {startPos.row, startPos.col, startDir};
     traveler.segmentList.push_back(startSegment);
-    grid[startPos.row][startPos.col] = SquareType::TRAVELER; // Mark the grid
+    grid[startPos.row][startPos.col] = SquareType::TRAVELER;
 
     // Assign color to the traveler
     for (int c = 0; c < 4; c++) {
@@ -453,7 +445,6 @@ void* travelerThreadFunction(void* arg) {
         // Check if the traveler has reached the exit
         if (traveler.segmentList.front().row == exitPos.row &&
             traveler.segmentList.front().col == exitPos.col) {
-            cout << "Traveler " << id << " reached the exit.\n";
             break;
         }
 

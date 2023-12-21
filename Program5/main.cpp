@@ -505,6 +505,12 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
         }
 
         pthread_mutex_lock(&sharedTravelers[i].lock); // Lock individual traveler
+
+        if (!sharedTravelers[i].isActive) {
+            pthread_mutex_unlock(&sharedTravelers[i].lock); // Unlock and continue
+            continue;
+        }
+
         moveTravelerHead(sharedTravelers[i]);
         pthread_mutex_unlock(&sharedTravelers[i].lock); // Unlock individual traveler
 
@@ -642,8 +648,7 @@ void* travelerThreadFunction(void* arg) {
         // Check if the traveler has reached the exit
         if (traveler.segmentList.front().row == exitPos.row &&
             traveler.segmentList.front().col == exitPos.col) {
-            cout << "Traveler " << id << " reached the exit.\n";
-
+            traveler.isActive = false;
             break;
         }
 		pthread_mutex_unlock(&traveler.lock);
@@ -731,17 +736,22 @@ int main(int argc, char* argv[])
     // Clean up
 	// Wait for all threads to finish
 	// Cleanup
-for (unsigned int i = 0; i < numRows; i++) {
-    for (unsigned int j = 0; j < numCols; j++) {
-        pthread_mutex_destroy(&gridLocks[i][j]);
+    for (unsigned int i = 0; i < numRows; i++) {
+        for (unsigned int j = 0; j < numCols; j++) {
+            pthread_mutex_destroy(&gridLocks[i][j]);
+        }
+        delete[] gridLocks[i];
     }
-    delete[] gridLocks[i];
-}
-delete[] gridLocks;
+    
+    delete[] gridLocks;
 
     for (int i = 0; i < numTravelers; ++i) {
         pthread_join(threads[i], NULL);
     }
+
+    sharedTravelers.erase(
+        std::remove_if(sharedTravelers.begin(), sharedTravelers.end(), [](const Traveler& t) { return !t.isActive; }),
+        sharedTravelers.end());
 
     // Destroy individual traveler locks
     for (int i = 0; i < numTravelers; ++i) {
@@ -1065,4 +1075,3 @@ void generatePartitions(void)
 		}
 	}
 }
-
