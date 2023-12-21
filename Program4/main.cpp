@@ -40,6 +40,7 @@ void generateWalls(void);
 void generatePartitions(void);
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves);
 void updateSegmentPositions(Traveler& traveler);
+void removeInactiveTravelers();
 
 
 #if 0
@@ -161,17 +162,17 @@ void slowdownTravelers(void)
 }
 
 void drawTravelers(void) {
-	updateTravelers(moveCount, numSegmentGrowthMoves);
-	pthread_mutex_lock(&lock);
+    updateTravelers(moveCount, numSegmentGrowthMoves);
+    pthread_mutex_lock(&lock);
     for (unsigned int k = 0; k < sharedTravelers.size(); k++) {
-        // Check if the traveler has been initialized (non-empty segmentList)
-        if (!sharedTravelers[k].segmentList.empty()) {
+        // Check if the traveler is active and has been initialized (non-empty segmentList)
+        if (sharedTravelers[k].isActive && !sharedTravelers[k].segmentList.empty()) {
             drawTraveler(sharedTravelers[k]);
         }
     }
-	pthread_mutex_unlock(&lock);
-
+    pthread_mutex_unlock(&lock);
 }
+
 
 
 void updateMessages(void)
@@ -240,7 +241,7 @@ Direction getRandomHorizontalDirection() {
 }
 
 
-bool canMovePartition(const SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions) {
+bool canMovePartition(const SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions, const std::vector<Traveler>& sharedTravelers, GridPosition exitPos) {
     for (const auto& pos : part.blockList) {
         int newRow = pos.row;
         int newCol = pos.col;
@@ -258,14 +259,28 @@ bool canMovePartition(const SlidingPartition& part, Direction dir, SquareType** 
             return false;
         }
 
-        // Check for free space and collisions with other partitions
+        // Check if the new position is the exit
+        if (newRow == exitPos.row && newCol == exitPos.col) {
+            return false;
+        }
+
+        // Check for free space, other partitions, and travelers
         if (grid[newRow][newCol] != SquareType::FREE_SQUARE) {
-            // Additionally check if the space is occupied by another partition
+            // Check against other partitions
             for (const auto& otherPart : partitions) {
-                if (&otherPart == &part) continue; // Skip checking against itself
+                if (&otherPart == &part) continue;
                 for (const auto& otherPos : otherPart.blockList) {
                     if (newRow == otherPos.row && newCol == otherPos.col) {
-                        // Collision detected
+                        return false;
+                    }
+                }
+            }
+
+            // Check against travelers
+            for (const auto& traveler : sharedTravelers) {
+                if (!traveler.isActive) continue;
+                for (const auto& segment : traveler.segmentList) {
+                    if (newRow == segment.row && newCol == segment.col) {
                         return false;
                     }
                 }
@@ -276,8 +291,10 @@ bool canMovePartition(const SlidingPartition& part, Direction dir, SquareType** 
 }
 
 
-void movePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions) {
-    if (!canMovePartition(part, dir, grid, numRows, numCols, partitions)) {
+
+
+void movePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions, const std::vector<Traveler>& sharedTravelers, GridPosition exitPos) {
+    if (!canMovePartition(part, dir, grid, numRows, numCols, partitions, sharedTravelers, exitPos)) {
         // Debugging: Log that the partition cannot move
         return;
     }
@@ -292,8 +309,8 @@ void movePartition(SlidingPartition& part, Direction dir, SquareType** grid, uns
         switch (dir) {
             case Direction::NORTH: pos.row--; break;
             case Direction::SOUTH: pos.row++; break;
-            case Direction::EAST: pos.col++; break;
-            case Direction::WEST: pos.col--; break;
+            case Direction::EAST:  pos.col++; break;
+            case Direction::WEST:  pos.col--; break;
         }
     }
 
@@ -304,25 +321,24 @@ void movePartition(SlidingPartition& part, Direction dir, SquareType** grid, uns
 }
 
 
-void safeMovePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions) {
+
+void safeMovePartition(SlidingPartition& part, Direction dir, SquareType** grid, unsigned int numRows, unsigned int numCols, const vector<SlidingPartition>& partitions, const std::vector<Traveler>& sharedTravelers, GridPosition exitPos) {
     pthread_mutex_lock(&lock);
-    movePartition(part, dir, grid, numRows, numCols, partitions);
+    movePartition(part, dir, grid, numRows, numCols, partitions, sharedTravelers, exitPos);
     pthread_mutex_unlock(&lock);
 }
 
 
 
-void updatePartitions(vector<SlidingPartition>& partitions, SquareType** grid, unsigned int numRows, unsigned int numCols) {
+
+void updatePartitions(vector<SlidingPartition>& partitions, SquareType** grid, unsigned int numRows, unsigned int numCols, const std::vector<Traveler>& sharedTravelers, GridPosition exitPos) {
     for (auto& part : partitions) {
-        Direction moveDir;
-        if (part.isVertical) {
-            moveDir = getRandomVerticalDirection();
-        } else {
-            moveDir = getRandomHorizontalDirection();
-        }
-        safeMovePartition(part, moveDir, grid, numRows, numCols, partitions);
+        Direction moveDir = part.isVertical ? getRandomVerticalDirection() : getRandomHorizontalDirection();
+        safeMovePartition(part, moveDir, grid, numRows, numCols, partitions, sharedTravelers, exitPos);
     }
 }
+
+
 
 
 
@@ -397,14 +413,18 @@ void growSegment(Traveler& traveler) {
 
 
 void moveTravelerHead(Traveler& traveler) {
-//Locked by thread function
+    // Locked by thread function
+
+	// Do not process inactive travelers
+    if (!traveler.isActive) {
+        return;
+    }
 
     bool hasMoved = false;
     Direction newDir;
     GridPosition nextPosition;
-	if (traveler.segmentList.empty()) {
+    if (traveler.segmentList.empty()) {
         // Handle the error or simply return to avoid further processing
-
         return;
     }
 
@@ -415,18 +435,15 @@ void moveTravelerHead(Traveler& traveler) {
 
     // Attempt to find a new direction that hasn't been tried yet
     while (!hasMoved && traveler.triedDirections.size() < static_cast<unsigned int>(Direction::NUM_DIRECTIONS)) {
-        Direction newDir = getRandomDirection(traveler.triedDirections);
-
+        newDir = getRandomDirection(traveler.triedDirections);
 
         // Skip if this direction has been tried already from the current position
         if (traveler.triedDirections.find(newDir) != traveler.triedDirections.end()) {
-
             continue;
         }
 
-        TravelerSegment &headSegment = traveler.segmentList.front();
+        TravelerSegment& headSegment = traveler.segmentList.front();
         nextPosition = {headSegment.row, headSegment.col};
-		
 
         // Calculate the new position based on the current direction
         switch (newDir) {
@@ -438,6 +455,24 @@ void moveTravelerHead(Traveler& traveler) {
 
         // Check if the new direction and next position are valid
         if (isValidMove(nextPosition, newDir)) {
+            // Check if the traveler has reached the exit
+            if (nextPosition.row == exitPos.row && nextPosition.col == exitPos.col) {
+				traveler.isActive = false;
+
+				// Clear the traveler's segments from the grid
+				for (const auto& segment : traveler.segmentList) {
+					grid[segment.row][segment.col] = SquareType::FREE_SQUARE;
+				}
+
+				// Increment the number of travelers who have solved the maze
+				pthread_mutex_lock(&lock); // Lock for modifying shared variable
+				numTravelersDone++;
+				pthread_mutex_unlock(&lock); // Unlock after modification
+
+				// No further movement needed as traveler reached the exit
+				break;
+			}
+
             // Move the head and update the direction
             headSegment.row = nextPosition.row;
             headSegment.col = nextPosition.col;
@@ -460,19 +495,26 @@ void moveTravelerHead(Traveler& traveler) {
     } else {
         traveler.hasMoved = false;
     }
-
 }
 
 
-
+void removeInactiveTravelers() {
+    pthread_mutex_lock(&lock); // Lock the global mutex
+    sharedTravelers.erase(
+        std::remove_if(sharedTravelers.begin(), sharedTravelers.end(),
+                       [](const Traveler& t) { return !t.isActive; }),
+        sharedTravelers.end());
+    pthread_mutex_unlock(&lock); // Unlock the global mutex
+}
 
 
 
 
 void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves) {
     for (int i = 0; i < sharedTravelers.size(); i++) {
-        if (sharedTravelers[i].segmentList.empty()) {
-            continue; // Skip to the next traveler
+        // Skip inactive or empty travelers
+        if (!sharedTravelers[i].isActive || sharedTravelers[i].segmentList.empty()) {
+            continue;
         }
 
         pthread_mutex_lock(&sharedTravelers[i].lock); // Lock individual traveler
@@ -483,15 +525,15 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
         pthread_mutex_lock(&lock); // Lock for modifying sharedTravelers vector
         if (sharedTravelers[i].segmentList.front().row == exitPos.row &&
             sharedTravelers[i].segmentList.front().col == exitPos.col) {
-            sharedTravelers.erase(sharedTravelers.begin() + i);
-            i--;
+            // Mark traveler as inactive instead of erasing
+            sharedTravelers[i].isActive = false;
             numTravelersDone++;
-            pthread_mutex_unlock(&lock); // Unlock after modifying the vector
-            continue;
+            // No need to decrement i as we are not erasing the traveler
         }
-        pthread_mutex_unlock(&lock); // Unlock as vector modification is done
+        pthread_mutex_unlock(&lock); // Unlock after modifying the vector
 
-        if (moveCount % numSegmentGrowthMoves == 0 && sharedTravelers[i].hasMoved) {
+        // Only grow segments for active travelers
+        if (sharedTravelers[i].isActive && moveCount % numSegmentGrowthMoves == 0 && sharedTravelers[i].hasMoved) {
             pthread_mutex_lock(&sharedTravelers[i].lock); // Lock individual traveler
             growSegment(sharedTravelers[i]);
             pthread_mutex_unlock(&sharedTravelers[i].lock); // Unlock individual traveler
@@ -499,6 +541,7 @@ void updateTravelers(unsigned int& moveCount, unsigned int numSegmentGrowthMoves
     }
     moveCount++;
 }
+
 
 
 
@@ -531,7 +574,6 @@ void initializeApplication(void) {
     // Generate a random exit position
     exitPos = getNewFreePosition();
     grid[exitPos.row][exitPos.col] = SquareType::EXIT;
-
     // Initialize traveler colors (used by threads)
     travelerColors = createTravelerColors(numTravelers);
 	travelerColors = createTravelerColors(numTravelers);
@@ -602,15 +644,9 @@ void* travelerThreadFunction(void* arg) {
             break; // or return NULL;
         }
 
-        // Check if the traveler has reached the exit
-        if (traveler.segmentList.front().row == exitPos.row &&
-            traveler.segmentList.front().col == exitPos.col) {
-            cout << "Traveler " << id << " reached the exit.\n";
-
-            break;
-        }
+        
 		pthread_mutex_unlock(&traveler.lock);
-		updatePartitions(partitionList, grid, numRows, numCols);
+		updatePartitions(partitionList, grid, numRows, numCols, sharedTravelers,exitPos);
 
 
         usleep(1000000); // 100000 microseconds = 100 milliseconds
@@ -670,8 +706,8 @@ int main(int argc, char* argv[])
 	sharedTravelers.resize(numTravelers);
 
     // Create threads for each traveler
+    // Create threads for each traveler
     vector<pthread_t> threads(numTravelers);
-    // Initialize sharedTravelers here
     for (int i = 0; i < numTravelers; ++i) {
         int *id = new int(i);
         if (pthread_create(&threads[i], NULL, travelerThreadFunction, id) != 0) {
@@ -679,30 +715,24 @@ int main(int argc, char* argv[])
         }
     }
 
-
-
-
-
-	//	Now we enter the main loop of the program and to a large extend
-	//	"lose control" over its execution.  The callback functions that 
-	//	we set up earlier will be called when the corresponding event
-	//	occurs
-	glutMainLoop();
-	
-    // Join threads after GLUT main loop
-
-    // Clean up
-	// Wait for all threads to finish
+    // Enter the main loop of the program
+    glutMainLoop();
+    
+    // Wait for all threads to finish
     for (int i = 0; i < numTravelers; ++i) {
         pthread_join(threads[i], NULL);
     }
+
+    // Remove inactive travelers
+    removeInactiveTravelers();
 
     // Destroy individual traveler locks
     for (int i = 0; i < numTravelers; ++i) {
         pthread_mutex_destroy(&sharedTravelers[i].lock);
     }
-	pthread_mutex_destroy(&lock);
+    pthread_mutex_destroy(&lock);
 
+    // Clean up dynamic memory allocations
     for (unsigned int i = 0; i < numRows; i++) {
         delete [] grid[i];
     }
@@ -764,75 +794,76 @@ Direction newDirection(Direction forbiddenDir)
 
 TravelerSegment newTravelerSegment(const TravelerSegment& currentSeg, bool& canAdd)
 {
-	TravelerSegment newSeg;
-	switch (currentSeg.dir)
-	{
-		case Direction::NORTH:
-			if (	currentSeg.row < numRows-1 &&
-					grid[currentSeg.row+1][currentSeg.col] == SquareType::FREE_SQUARE)
-			{
-				newSeg.row = currentSeg.row+1;
-				newSeg.col = currentSeg.col;
-				newSeg.dir = newDirection(Direction::SOUTH);
-				grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
-				canAdd = true;
-			}
-			//	no more segment
-			else
-				canAdd = false;
-			break;
+    TravelerSegment newSeg;
+    switch (currentSeg.dir)
+    {
+        case Direction::NORTH:
+            if (currentSeg.row < numRows - 1 &&
+                grid[currentSeg.row + 1][currentSeg.col] == SquareType::FREE_SQUARE &&
+                grid[currentSeg.row + 1][currentSeg.col] != SquareType::WALL)  // Check if not a wall
+            {
+                newSeg.row = currentSeg.row + 1;
+                newSeg.col = currentSeg.col;
+                newSeg.dir = newDirection(Direction::SOUTH);
+                grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
+                canAdd = true;
+            }
+            else
+                canAdd = false;
+            break;
 
-		case Direction::SOUTH:
-			if (	currentSeg.row > 0 &&
-					grid[currentSeg.row-1][currentSeg.col] == SquareType::FREE_SQUARE)
-			{
-				newSeg.row = currentSeg.row-1;
-				newSeg.col = currentSeg.col;
-				newSeg.dir = newDirection(Direction::NORTH);
-				grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
-				canAdd = true;
-			}
-			//	no more segment
-			else
-				canAdd = false;
-			break;
+        case Direction::SOUTH:
+            if (currentSeg.row > 0 &&
+                grid[currentSeg.row - 1][currentSeg.col] == SquareType::FREE_SQUARE &&
+                grid[currentSeg.row - 1][currentSeg.col] != SquareType::WALL)  // Check if not a wall
+            {
+                newSeg.row = currentSeg.row - 1;
+                newSeg.col = currentSeg.col;
+                newSeg.dir = newDirection(Direction::NORTH);
+                grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
+                canAdd = true;
+            }
+            else
+                canAdd = false;
+            break;
 
-		case Direction::WEST:
-			if (	currentSeg.col < numCols-1 &&
-					grid[currentSeg.row][currentSeg.col+1] == SquareType::FREE_SQUARE)
-			{
-				newSeg.row = currentSeg.row;
-				newSeg.col = currentSeg.col+1;
-				newSeg.dir = newDirection(Direction::EAST);
-				grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
-				canAdd = true;
-			}
-			//	no more segment
-			else
-				canAdd = false;
-			break;
+        case Direction::WEST:
+            if (currentSeg.col < numCols - 1 &&
+                grid[currentSeg.row][currentSeg.col + 1] == SquareType::FREE_SQUARE &&
+                grid[currentSeg.row][currentSeg.col + 1] != SquareType::WALL)  // Check if not a wall
+            {
+                newSeg.row = currentSeg.row;
+                newSeg.col = currentSeg.col + 1;
+                newSeg.dir = newDirection(Direction::EAST);
+                grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
+                canAdd = true;
+            }
+            else
+                canAdd = false;
+            break;
 
-		case Direction::EAST:
-			if (	currentSeg.col > 0 &&
-					grid[currentSeg.row][currentSeg.col-1] == SquareType::FREE_SQUARE)
-			{
-				newSeg.row = currentSeg.row;
-				newSeg.col = currentSeg.col-1;
-				newSeg.dir = newDirection(Direction::WEST);
-				grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
-				canAdd = true;
-			}
-			//	no more segment
-			else
-				canAdd = false;
-			break;
-		
-		default:
-			canAdd = false;
-	}
-	
-	return newSeg;
+        case Direction::EAST:
+            if (currentSeg.col > 0 &&
+                grid[currentSeg.row][currentSeg.col - 1] == SquareType::FREE_SQUARE &&
+                grid[currentSeg.row][currentSeg.col - 1] != SquareType::WALL)  // Check if not a wall
+            {
+                newSeg.row = currentSeg.row;
+                newSeg.col = currentSeg.col - 1;
+                newSeg.dir = newDirection(Direction::WEST);
+                grid[newSeg.row][newSeg.col] = SquareType::TRAVELER;
+                canAdd = true;
+            }
+            else
+                canAdd = false;
+            break;
+        
+        default:
+            canAdd = false;
+    }
+    
+    return newSeg;
 }
+
 
 void generateWalls(void)
 {
@@ -1019,4 +1050,3 @@ void generatePartitions(void)
 		}
 	}
 }
-

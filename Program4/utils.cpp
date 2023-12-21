@@ -84,4 +84,3 @@ string typeStr(const SquareType& type)
 
 	return outStr;
 }
-
